@@ -1,0 +1,24 @@
+[package]
+name = "bongo"
+version = "0.1.0"
+authors = ["Raphaël Thériault <raphael_theriault@outlook.com>"]
+edition = "2018"
+license = "Apache-2.0"
+description = "Mongoose meets Rust"
+
+[workspace]
+members = ["derive"]
+
+[dependencies]
+async-trait = "0.1"
+bongo_derive = { path = "derive", optional = true }
+bson = "0.14"
+lazy_static = "1"
+mongodb = "0.9"
+serde = "1"
+thiserror = "1"
+tokio = { version = "0.2", optional = true, features = ["blocking"] }
+
+[features]
+default = ["derive", "tokio"]
+derive = ["bongo_derive"]

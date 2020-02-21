@@ -1,0 +1,14 @@
+[package]
+name = "bongo_derive"
+version = "0.1.0"
+authors = ["Raphaël Thériault <raphael_theriault@outlook.com>"]
+edition = "2018"
+license = "Apache-2.0"
+description = "Derives for bongo traits"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+quote = "1.0"
+syn = "1.0"

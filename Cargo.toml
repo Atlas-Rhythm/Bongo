@@ -13,8 +13,8 @@ members = ["derive"]
 async-trait = "0.1"
 bongo_derive = { path = "derive", optional = true }
 bson = "0.14"
-lazy_static = "1"
 mongodb = "0.9"
+once_cell = "1"
 serde = "1"
 thiserror = "1"
 tokio = { version = "0.2", optional = true, features = ["blocking"] }

@@ -8,6 +8,10 @@ pub enum Error {
     BsonDecode(#[from] bson::DecoderError),
     #[error("bson decoding error")]
     BsonEncode(#[from] bson::EncoderError),
+    #[error("tried to connect multiple times")]
+    AlreadyConnected,
+    #[error("tried to access unconnected client")]
+    NotConnected,
 
     #[cfg(feature = "tokio")]
     #[cfg_attr(feature = "tokio", error("task error"))]

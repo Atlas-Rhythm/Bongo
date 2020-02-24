@@ -1,3 +1,3 @@
-pub use lazy_static;
+pub use once_cell;
 #[cfg(feature = "tokio")]
 pub use tokio;

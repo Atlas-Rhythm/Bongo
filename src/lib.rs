@@ -133,24 +133,15 @@ pub trait Model: BlockingModel + Send + Sync + 'static {
 
     async fn insert_many(docs: &[Self]) -> Result<InsertManyResult> {
         let docs = iter_to_bson(docs)?;
-        spawn_blocking(move || {
-            Self::collection()?
-                .insert_many(docs, None)
-                .map_err(|e| Error::from(e))
-        })
-        .await?
+        spawn_blocking(move || Ok(Self::collection()?.insert_many(docs, None)?)).await?
     }
     async fn update_many<Q>(query: Q, update: &Self::Update) -> Result<UpdateResult>
     where
         Q: Into<Document> + Send + 'static,
     {
         let update = to_document(update)?;
-        spawn_blocking(move || {
-            Self::collection()?
-                .update_many(query.into(), update, None)
-                .map_err(|e| Error::from(e))
-        })
-        .await?
+        spawn_blocking(move || Ok(Self::collection()?.update_many(query.into(), update, None)?))
+            .await?
     }
     async fn delete_many<Q>(query: Q) -> Result<DeleteResult>
     where
@@ -169,19 +160,17 @@ pub trait Model: BlockingModel + Send + Sync + 'static {
             None => {
                 let replacement = to_document(self)?;
                 spawn_blocking(move || {
-                    Self::collection()?
-                        .replace_one(
-                            query,
-                            replacement,
-                            ReplaceOptions {
-                                bypass_document_validation: None,
-                                upsert: Some(true),
-                                collation: None,
-                                hint: None,
-                                write_concern: None,
-                            },
-                        )
-                        .map_err(|e| Error::from(e))
+                    Ok(Self::collection()?.replace_one(
+                        query,
+                        replacement,
+                        ReplaceOptions {
+                            bypass_document_validation: None,
+                            upsert: Some(true),
+                            collation: None,
+                            hint: None,
+                            write_concern: None,
+                        },
+                    )?)
                 })
             }
         }
@@ -189,12 +178,7 @@ pub trait Model: BlockingModel + Send + Sync + 'static {
     }
     async fn remove(&self) -> Result<DeleteResult> {
         let query = doc! {"_id": self.id()};
-        spawn_blocking(move || {
-            Self::collection()?
-                .delete_one(query, None)
-                .map_err(|e| Error::from(e))
-        })
-        .await?
+        spawn_blocking(move || Ok(Self::collection()?.delete_one(query, None)?)).await?
     }
 }
 

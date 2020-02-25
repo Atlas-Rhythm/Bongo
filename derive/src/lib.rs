@@ -76,7 +76,7 @@ fn update_struct(ident: &Ident, fields: &FieldsNamed) -> proc_macro2::TokenStrea
     let idents = fields.named.iter().map(|f| &f.ident);
     let types = fields.named.iter().map(|f| &f.ty);
     quote! {
-        #[derive(serde::Serialize, serde::Deserialize)]
+        #[derive(::serde::Serialize, ::serde::Deserialize)]
         pub struct #ident {
             #(pub #idents: Option<#types>,)*
         }

@@ -22,6 +22,7 @@ pub trait BlockingModel: DeserializeOwned + Serialize {
     fn collection() -> Result<&'static Collection>;
 
     fn id(&self) -> ObjectId;
+    fn update(&self) -> Option<&Self::Update>;
 
     fn estimated_document_count_sync() -> Result<i64> {
         Ok(Self::collection()?.estimated_document_count(None)?)
@@ -75,17 +76,21 @@ pub trait BlockingModel: DeserializeOwned + Serialize {
     }
 
     fn save_sync(&self) -> Result<UpdateResult> {
-        Ok(Self::collection()?.replace_one(
-            doc! {"_id": self.id()},
-            to_document(&self)?,
-            ReplaceOptions {
-                bypass_document_validation: None,
-                upsert: Some(true),
-                collation: None,
-                hint: None,
-                write_concern: None,
-            },
-        )?)
+        let query = doc! {"_id": self.id()};
+        match self.update() {
+            Some(u) => Ok(Self::collection()?.update_one(query, to_document(u)?, None)?),
+            None => Ok(Self::collection()?.replace_one(
+                query,
+                to_document(&self)?,
+                ReplaceOptions {
+                    bypass_document_validation: None,
+                    upsert: Some(true),
+                    collation: None,
+                    hint: None,
+                    write_concern: None,
+                },
+            )?),
+        }
     }
     fn remove_sync(&self) -> Result<DeleteResult> {
         Ok(Self::collection()?.delete_one(doc! {"_id": self.id()}, None)?)
@@ -156,22 +161,30 @@ pub trait Model: BlockingModel + Send + Sync + 'static {
 
     async fn save(&self) -> Result<UpdateResult> {
         let query = doc! {"_id": self.id()};
-        let replacement = to_document(self)?;
-        spawn_blocking(move || {
-            Self::collection()?
-                .replace_one(
-                    query,
-                    replacement,
-                    ReplaceOptions {
-                        bypass_document_validation: None,
-                        upsert: Some(true),
-                        collation: None,
-                        hint: None,
-                        write_concern: None,
-                    },
-                )
-                .map_err(|e| Error::from(e))
-        })
+        match self.update() {
+            Some(u) => {
+                let update = to_document(u);
+                spawn_blocking(move || Ok(Self::collection()?.update_one(query, update?, None)?))
+            }
+            None => {
+                let replacement = to_document(self)?;
+                spawn_blocking(move || {
+                    Self::collection()?
+                        .replace_one(
+                            query,
+                            replacement,
+                            ReplaceOptions {
+                                bypass_document_validation: None,
+                                upsert: Some(true),
+                                collation: None,
+                                hint: None,
+                                write_concern: None,
+                            },
+                        )
+                        .map_err(|e| Error::from(e))
+                })
+            }
+        }
         .await?
     }
     async fn remove(&self) -> Result<DeleteResult> {

@@ -26,15 +26,6 @@ pub fn model(input: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
-fn update_struct(ident: &Ident, fields: &FieldsNamed) -> proc_macro2::TokenStream {
-    let iter = fields.named.iter();
-    quote! {
-        pub struct #ident {
-            #(pub #iter.ident: Option<#iter.ty>),*
-        }
-    }
-}
-
 fn blocking_model_impl(input: DeriveInput) -> proc_macro2::TokenStream {
     let ident = input.ident;
 
@@ -56,7 +47,19 @@ fn blocking_model_impl(input: DeriveInput) -> proc_macro2::TokenStream {
             type Update = #update_ident;
 
             fn collection() -> ::bongo::Result<&'static ::bongo::re_exports::mongodb::Collection> {
-                Ok(::bongo::database()?.collection(""))
+                use ::bongo::re_exports::{
+                    mongodb::Collection,
+                    once_cell::sync::OnceCell,
+                };
+
+                static COLLECTION: OnceCell<Collection> = OnceCell::new();
+
+                if let Some(c) = COLLECTION.get() {
+                    return Ok(c);
+                }
+
+                COLLECTION.set(::bongo::database()?.collection("")).unwrap();
+                Ok(COLLECTION.get().unwrap())
             }
 
             fn id(&self) -> ::bongo::re_exports::bson::oid::ObjectId {
@@ -65,6 +68,17 @@ fn blocking_model_impl(input: DeriveInput) -> proc_macro2::TokenStream {
             fn update(&self) -> Option<&Self::Update> {
                 None
             }
+        }
+    }
+}
+
+fn update_struct(ident: &Ident, fields: &FieldsNamed) -> proc_macro2::TokenStream {
+    let idents = fields.named.iter().map(|f| &f.ident);
+    let types = fields.named.iter().map(|f| &f.ty);
+    quote! {
+        #[derive(serde::Serialize, serde::Deserialize)]
+        pub struct #ident {
+            #(pub #idents: Option<#types>,)*
         }
     }
 }

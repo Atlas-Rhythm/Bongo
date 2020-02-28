@@ -1,7 +1,10 @@
 [package]
 name = "bongo"
 version = "0.1.0"
-authors = ["Raphaël Thériault <raphael_theriault@outlook.com>"]
+authors = [
+    "Atlas Rhythm",
+    "Raphaël Thériault <raphael_theriault@outlook.com>",
+]
 edition = "2018"
 license = "Apache-2.0"
 description = "Mongoose meets Rust"

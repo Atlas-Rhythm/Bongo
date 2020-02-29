@@ -40,6 +40,8 @@ fn blocking_model_impl(input: DeriveInput) -> proc_macro2::TokenStream {
     let update_ident = format_ident!("{}Update", ident);
     let update_def = update_struct(&update_ident, &fields);
 
+    let collection = camel_case_ident(&ident.to_string());
+
     quote! {
         #update_def
 
@@ -58,7 +60,7 @@ fn blocking_model_impl(input: DeriveInput) -> proc_macro2::TokenStream {
                     return Ok(c);
                 }
 
-                COLLECTION.set(::bongo::database()?.collection("")).unwrap();
+                COLLECTION.set(::bongo::database()?.collection(#collection)).unwrap();
                 Ok(COLLECTION.get().unwrap())
             }
 
@@ -81,4 +83,9 @@ fn update_struct(ident: &Ident, fields: &FieldsNamed) -> proc_macro2::TokenStrea
             #(pub #idents: Option<#types>,)*
         }
     }
+}
+
+fn camel_case_ident(s: &str) -> String {
+    let first_char = s.chars().next().unwrap().to_lowercase().next().unwrap();
+    format!("{}{}", first_char, &s[1..])
 }

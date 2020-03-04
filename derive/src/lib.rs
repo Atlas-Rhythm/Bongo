@@ -87,5 +87,5 @@ fn update_struct(ident: &Ident, fields: &FieldsNamed) -> proc_macro2::TokenStrea
 
 fn camel_case_ident(s: &str) -> String {
     let first_char = s.chars().next().unwrap().to_lowercase().next().unwrap();
-    format!("{}{}", first_char, &s[1..])
+    format!("{}{}s", first_char, &s[1..])
 }

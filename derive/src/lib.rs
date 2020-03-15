@@ -40,11 +40,14 @@ fn blocking_model_impl(input: DeriveInput) -> proc_macro2::TokenStream {
     };
 
     let collection = collection_name(&input);
-    let id = &id_field(fields).ty;
+
+    let id = id_field(fields);
+    let id_ty = &id.ty;
+    let id_ident = id.ident.as_ref().unwrap();
 
     quote! {
         impl ::bongo::BlockingModel for #ident {
-            type Id = #id;
+            type Id = #id_ty;
 
             fn collection() -> ::bongo::Result<&'static ::bongo::re_exports::mongodb::Collection> {
                 use ::bongo::re_exports::{
@@ -63,7 +66,7 @@ fn blocking_model_impl(input: DeriveInput) -> proc_macro2::TokenStream {
             }
 
             fn id(&self) -> Self::Id {
-                self.id.clone()
+                self.#id_ident.clone()
             }
         }
     }

@@ -8,17 +8,16 @@ pub use bongo_derive::*;
 
 pub use crate::{error::Error, globals::*};
 use bson::{bson, doc, Bson, Document};
-use mongodb::{options::ReplaceOptions, results::*, Collection};
+use mongodb::{
+    options::{ReplaceOptions, UpdateModifications},
+    results::*,
+    Collection,
+};
 use serde::{de::DeserializeOwned, Serialize};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
 pub trait BlockingModel: DeserializeOwned + Serialize {
-    #[cfg(not(feature = "tokio"))]
-    type Update: Serialize;
-    #[cfg(feature = "tokio")]
-    type Update: Serialize + Sync;
-
     #[cfg(not(feature = "tokio"))]
     type Id: Into<Bson>;
     #[cfg(feature = "tokio")]
@@ -27,8 +26,6 @@ pub trait BlockingModel: DeserializeOwned + Serialize {
     fn collection() -> Result<&'static Collection>;
 
     fn id(&self) -> Self::Id;
-    fn update(&self) -> Option<&Self::Update>;
-
     fn id_query(&self) -> Document {
         doc! {"_id": self.id().into()}
     }
@@ -71,11 +68,12 @@ pub trait BlockingModel: DeserializeOwned + Serialize {
     fn insert_many_sync(docs: &[Self]) -> Result<InsertManyResult> {
         Ok(Self::collection()?.insert_many(to_documents(docs)?, None)?)
     }
-    fn update_many_sync<Q>(query: Q, update: &Self::Update) -> Result<UpdateResult>
+    fn update_many_sync<Q, U>(query: Q, update: U) -> Result<UpdateResult>
     where
         Q: Into<Document>,
+        U: Into<UpdateModifications>,
     {
-        Ok(Self::collection()?.update_many(query.into(), to_document(update)?, None)?)
+        Ok(Self::collection()?.update_many(query.into(), update.into(), None)?)
     }
     fn delete_many_sync<Q>(query: Q) -> Result<DeleteResult>
     where
@@ -85,21 +83,17 @@ pub trait BlockingModel: DeserializeOwned + Serialize {
     }
 
     fn save_sync(&self) -> Result<UpdateResult> {
-        let query = self.id_query();
-        match self.update() {
-            Some(u) => Ok(Self::collection()?.update_one(query, to_document(u)?, None)?),
-            None => Ok(Self::collection()?.replace_one(
-                query,
-                to_document(&self)?,
-                ReplaceOptions {
-                    bypass_document_validation: None,
-                    upsert: Some(true),
-                    collation: None,
-                    hint: None,
-                    write_concern: None,
-                },
-            )?),
-        }
+        Ok(Self::collection()?.replace_one(
+            self.id_query(),
+            to_document(&self)?,
+            ReplaceOptions {
+                bypass_document_validation: None,
+                upsert: Some(true),
+                collation: None,
+                hint: None,
+                write_concern: None,
+            },
+        )?)
     }
     fn remove_sync(&self) -> Result<DeleteResult> {
         Ok(Self::collection()?.delete_one(self.id_query(), None)?)
@@ -144,13 +138,12 @@ pub trait Model: BlockingModel + Send + Sync + 'static {
         let docs = to_documents(docs)?;
         spawn_blocking(move || Ok(Self::collection()?.insert_many(docs, None)?)).await?
     }
-    async fn update_many<Q>(query: Q, update: &Self::Update) -> Result<UpdateResult>
+    async fn update_many<Q, U>(query: Q, update: U) -> Result<UpdateResult>
     where
         Q: Into<Document> + Send + 'static,
+        U: Into<UpdateModifications> + Send + 'static,
     {
-        let update = to_document(update)?;
-        spawn_blocking(move || Ok(Self::collection()?.update_many(query.into(), update, None)?))
-            .await?
+        spawn_blocking(move || Ok(Self::update_many_sync(query.into(), update.into())?)).await?
     }
     async fn delete_many<Q>(query: Q) -> Result<DeleteResult>
     where
@@ -161,28 +154,20 @@ pub trait Model: BlockingModel + Send + Sync + 'static {
 
     async fn save(&self) -> Result<UpdateResult> {
         let query = self.id_query();
-        match self.update() {
-            Some(u) => {
-                let update = to_document(u);
-                spawn_blocking(move || Ok(Self::collection()?.update_one(query, update?, None)?))
-            }
-            None => {
-                let replacement = to_document(self)?;
-                spawn_blocking(move || {
-                    Ok(Self::collection()?.replace_one(
-                        query,
-                        replacement,
-                        ReplaceOptions {
-                            bypass_document_validation: None,
-                            upsert: Some(true),
-                            collation: None,
-                            hint: None,
-                            write_concern: None,
-                        },
-                    )?)
-                })
-            }
-        }
+        let replacement = to_document(self)?;
+        spawn_blocking(move || {
+            Ok(Self::collection()?.replace_one(
+                query,
+                replacement,
+                ReplaceOptions {
+                    bypass_document_validation: None,
+                    upsert: Some(true),
+                    collation: None,
+                    hint: None,
+                    write_concern: None,
+                },
+            )?)
+        })
         .await?
     }
     async fn remove(&self) -> Result<DeleteResult> {

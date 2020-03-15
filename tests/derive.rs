@@ -4,14 +4,17 @@ use serde::{Deserialize, Serialize};
 
 #[derive(BlockingModel, Serialize, Deserialize)]
 struct ExampleBlockingModel {
+    #[serde(rename = "_id")]
     id: ObjectId,
     name: String,
     age: u8,
 }
 
 #[derive(Model, Serialize, Deserialize)]
+#[bongo(collection = "asyncModels")]
 struct ExampleModel {
-    id: ObjectId,
-    name: String,
-    age: u8,
+    #[serde(rename = "_id")]
+    id: u64,
+    contents: Vec<String>,
+    author: ObjectId,
 }

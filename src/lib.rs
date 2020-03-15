@@ -19,9 +19,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 pub trait BlockingModel: DeserializeOwned + Serialize {
     #[cfg(not(feature = "tokio"))]
-    type Id: Into<Bson>;
+    type Id: Into<Bson> + Clone;
     #[cfg(feature = "tokio")]
-    type Id: Into<Bson> + Send;
+    type Id: Into<Bson> + Clone + Send;
 
     fn collection() -> Result<&'static Collection>;
 

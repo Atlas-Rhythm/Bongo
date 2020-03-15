@@ -1,16 +1,19 @@
 extern crate proc_macro;
 
 use proc_macro::TokenStream;
-use quote::{format_ident, quote};
-use syn::{parse_macro_input, Data, DeriveInput, Fields, FieldsNamed, Ident};
+use quote::quote;
+use syn::{
+    parse_macro_input, Attribute, Data, DeriveInput, Field, Fields, FieldsNamed, Lit, Meta,
+    MetaList, NestedMeta,
+};
 
-#[proc_macro_derive(BlockingModel)]
+#[proc_macro_derive(BlockingModel, attributes(bongo))]
 pub fn blocking_model(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     TokenStream::from(blocking_model_impl(input))
 }
 
-#[proc_macro_derive(Model)]
+#[proc_macro_derive(Model, attributes(bongo))]
 pub fn model(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
@@ -27,26 +30,21 @@ pub fn model(input: TokenStream) -> TokenStream {
 }
 
 fn blocking_model_impl(input: DeriveInput) -> proc_macro2::TokenStream {
-    let ident = input.ident;
-
-    let fields = match input.data {
-        Data::Struct(s) => match s.fields {
+    let ident = &input.ident;
+    let fields = match &input.data {
+        Data::Struct(s) => match &s.fields {
             Fields::Named(f) => f,
             _ => panic!("bongo only supports named fields"),
         },
         _ => panic!("bongo only supports structs"),
     };
 
-    let update_ident = format_ident!("{}Update", ident);
-    let update_def = update_struct(&update_ident, &fields);
-
-    let collection = camel_case_ident(&ident.to_string());
+    let collection = collection_name(&input);
+    let id = &id_field(fields).ty;
 
     quote! {
-        #update_def
-
         impl ::bongo::BlockingModel for #ident {
-            type Update = #update_ident;
+            type Id = #id;
 
             fn collection() -> ::bongo::Result<&'static ::bongo::re_exports::mongodb::Collection> {
                 use ::bongo::re_exports::{
@@ -64,28 +62,85 @@ fn blocking_model_impl(input: DeriveInput) -> proc_macro2::TokenStream {
                 Ok(COLLECTION.get().unwrap())
             }
 
-            fn id(&self) -> ::bongo::re_exports::bson::oid::ObjectId {
+            fn id(&self) -> Self::Id {
                 self.id.clone()
             }
-            fn update(&self) -> Option<&Self::Update> {
-                None
+        }
+    }
+}
+
+fn attr_is_bongo(attr: &Attribute) -> bool {
+    attr.path.is_ident("bongo")
+}
+
+fn parse_attr(attr: &Attribute) -> MetaList {
+    match attr.parse_meta() {
+        Ok(Meta::List(l)) => l,
+        _ => panic!("invalid attribute syntax"),
+    }
+}
+
+fn camel_case(s: &str) -> String {
+    let first_char = s.as_bytes()[0].to_ascii_lowercase() as char;
+    format!("{}{}s", first_char, &s[1..])
+}
+
+fn collection_name(input: &DeriveInput) -> String {
+    let attrs = &input.attrs;
+    let mut result = None;
+    for attr in attrs {
+        if !attr_is_bongo(attr) {
+            continue;
+        }
+
+        let attr = parse_attr(attr);
+        for opt in attr.nested {
+            let nv = match opt {
+                NestedMeta::Meta(Meta::NameValue(nv)) => nv,
+                _ => continue,
+            };
+            if nv.path.is_ident("collection") {
+                match nv.lit {
+                    Lit::Str(s) => result = Some(s.value()),
+                    _ => panic!("collection name should be a string literal"),
+                }
             }
         }
     }
+    result.unwrap_or_else(|| camel_case(&input.ident.to_string()))
 }
 
-fn update_struct(ident: &Ident, fields: &FieldsNamed) -> proc_macro2::TokenStream {
-    let idents = fields.named.iter().map(|f| &f.ident);
-    let types = fields.named.iter().map(|f| &f.ty);
-    quote! {
-        #[derive(::serde::Serialize, ::serde::Deserialize)]
-        pub struct #ident {
-            #(pub #idents: Option<#types>,)*
+fn id_field(fields: &FieldsNamed) -> &Field {
+    for field in &fields.named {
+        if &field.ident.as_ref().unwrap().to_string() == "_id" {
+            return field;
+        }
+        for attr in &field.attrs {
+            if !attr.path.is_ident("serde") {
+                continue;
+            }
+
+            let attr = match attr.parse_meta() {
+                Ok(Meta::List(l)) => l,
+                _ => continue,
+            };
+            for opt in attr.nested {
+                let nv = match opt {
+                    NestedMeta::Meta(Meta::NameValue(nv)) => nv,
+                    _ => continue,
+                };
+                if nv.path.is_ident("rename") {
+                    match nv.lit {
+                        Lit::Str(s) => {
+                            if &s.value() == "_id" {
+                                return field;
+                            }
+                        }
+                        _ => continue,
+                    }
+                }
+            }
         }
     }
-}
-
-fn camel_case_ident(s: &str) -> String {
-    let first_char = s.chars().next().unwrap().to_lowercase().next().unwrap();
-    format!("{}{}s", first_char, &s[1..])
+    panic!("no _id field on struct");
 }

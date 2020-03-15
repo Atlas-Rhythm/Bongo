@@ -7,7 +7,7 @@ pub mod re_exports;
 pub use bongo_derive::*;
 
 pub use crate::{error::Error, globals::*};
-use bson::{bson, doc, oid::ObjectId, Bson, Document};
+use bson::{bson, doc, Bson, Document};
 use mongodb::{options::ReplaceOptions, results::*, Collection};
 use serde::{de::DeserializeOwned, Serialize};
 
@@ -19,10 +19,19 @@ pub trait BlockingModel: DeserializeOwned + Serialize {
     #[cfg(feature = "tokio")]
     type Update: Serialize + Sync;
 
+    #[cfg(not(feature = "tokio"))]
+    type Id: Into<Bson>;
+    #[cfg(feature = "tokio")]
+    type Id: Into<Bson> + Send;
+
     fn collection() -> Result<&'static Collection>;
 
-    fn id(&self) -> ObjectId;
+    fn id(&self) -> Self::Id;
     fn update(&self) -> Option<&Self::Update>;
+
+    fn id_query(&self) -> Document {
+        doc! {"_id": self.id().into()}
+    }
 
     fn estimated_document_count_sync() -> Result<i64> {
         Ok(Self::collection()?.estimated_document_count(None)?)
@@ -55,12 +64,12 @@ pub trait BlockingModel: DeserializeOwned + Serialize {
             .map(|v| bson::from_bson(v.into()))
             .transpose()?)
     }
-    fn find_by_id_sync(id: ObjectId) -> Result<Option<Self>> {
-        Self::find_one_sync(doc! {"_id": id})
+    fn find_by_id_sync(id: Self::Id) -> Result<Option<Self>> {
+        Self::find_one_sync(doc! {"_id": id.into()})
     }
 
     fn insert_many_sync(docs: &[Self]) -> Result<InsertManyResult> {
-        Ok(Self::collection()?.insert_many(iter_to_bson(docs)?, None)?)
+        Ok(Self::collection()?.insert_many(to_documents(docs)?, None)?)
     }
     fn update_many_sync<Q>(query: Q, update: &Self::Update) -> Result<UpdateResult>
     where
@@ -76,7 +85,7 @@ pub trait BlockingModel: DeserializeOwned + Serialize {
     }
 
     fn save_sync(&self) -> Result<UpdateResult> {
-        let query = doc! {"_id": self.id()};
+        let query = self.id_query();
         match self.update() {
             Some(u) => Ok(Self::collection()?.update_one(query, to_document(u)?, None)?),
             None => Ok(Self::collection()?.replace_one(
@@ -93,7 +102,7 @@ pub trait BlockingModel: DeserializeOwned + Serialize {
         }
     }
     fn remove_sync(&self) -> Result<DeleteResult> {
-        Ok(Self::collection()?.delete_one(doc! {"_id": self.id()}, None)?)
+        Ok(Self::collection()?.delete_one(self.id_query(), None)?)
     }
 }
 
@@ -127,12 +136,12 @@ pub trait Model: BlockingModel + Send + Sync + 'static {
     {
         spawn_blocking(move || Self::find_one_sync(filter)).await?
     }
-    async fn find_by_id(id: ObjectId) -> Result<Option<Self>> {
+    async fn find_by_id(id: Self::Id) -> Result<Option<Self>> {
         spawn_blocking(move || Self::find_by_id_sync(id)).await?
     }
 
     async fn insert_many(docs: &[Self]) -> Result<InsertManyResult> {
-        let docs = iter_to_bson(docs)?;
+        let docs = to_documents(docs)?;
         spawn_blocking(move || Ok(Self::collection()?.insert_many(docs, None)?)).await?
     }
     async fn update_many<Q>(query: Q, update: &Self::Update) -> Result<UpdateResult>
@@ -151,7 +160,7 @@ pub trait Model: BlockingModel + Send + Sync + 'static {
     }
 
     async fn save(&self) -> Result<UpdateResult> {
-        let query = doc! {"_id": self.id()};
+        let query = self.id_query();
         match self.update() {
             Some(u) => {
                 let update = to_document(u);
@@ -177,12 +186,12 @@ pub trait Model: BlockingModel + Send + Sync + 'static {
         .await?
     }
     async fn remove(&self) -> Result<DeleteResult> {
-        let query = doc! {"_id": self.id()};
+        let query = self.id_query();
         spawn_blocking(move || Ok(Self::collection()?.delete_one(query, None)?)).await?
     }
 }
 
-fn iter_to_bson<T: Serialize>(docs: &[T]) -> Result<Vec<Document>> {
+fn to_documents<T: Serialize>(docs: &[T]) -> Result<Vec<Document>> {
     docs.iter()
         .map(|s| match bson::to_bson(s) {
             Ok(b) => match b {

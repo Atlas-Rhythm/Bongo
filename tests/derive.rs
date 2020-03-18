@@ -13,8 +13,7 @@ struct ExampleBlockingModel {
 #[derive(Model, Serialize, Deserialize)]
 #[bongo(collection = "asyncModels")]
 struct ExampleModel {
-    #[serde(rename = "_id")]
-    id: u64,
+    _id: u64,
     contents: Vec<String>,
     author: ObjectId,
 }

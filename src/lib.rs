@@ -40,17 +40,22 @@ pub trait BlockingModel: DeserializeOwned + Serialize {
         Ok(Self::collection()?.count_documents(filter, None)?)
     }
 
-    fn find_sync<F>(filter: F) -> Result<Vec<Self>>
+    fn find_sync<F, L, S>(filter: F, limit: L, skip: S) -> Result<Vec<Self>>
     where
         F: Into<Option<Document>>,
+        L: Into<Option<usize>>,
+        S: Into<Option<usize>>,
     {
-        Self::collection()?
-            .find(filter, None)?
-            .map(|r| match r {
-                Ok(d) => bson::from_bson(d.into()).map_err(|e| e.into()),
-                Err(e) => Err(e.into()),
-            })
-            .collect()
+        let iter = Self::collection()?.find(filter, None)?.map(|r| match r {
+            Ok(d) => bson::from_bson(d.into()).map_err(|e| e.into()),
+            Err(e) => Err(e.into()),
+        });
+        match (limit.into(), skip.into()) {
+            (Some(l), Some(s)) => iter.skip(s).take(l).collect(),
+            (Some(l), None) => iter.take(l).collect(),
+            (None, Some(s)) => iter.skip(s).collect(),
+            (None, None) => iter.collect(),
+        }
     }
     fn find_one_sync<F>(filter: F) -> Result<Option<Self>>
     where
@@ -118,11 +123,13 @@ pub trait Model: BlockingModel + Send + Sync + 'static {
         spawn_blocking(move || Self::count_documents_sync(filter)).await?
     }
 
-    async fn find<F>(filter: F) -> Result<Vec<Self>>
+    async fn find<F, L, S>(filter: F, limit: L, skip: S) -> Result<Vec<Self>>
     where
         F: Into<Option<Document>> + Send + 'static,
+        L: Into<Option<usize>> + Send + 'static,
+        S: Into<Option<usize>> + Send + 'static,
     {
-        spawn_blocking(move || Self::find_sync(filter)).await?
+        spawn_blocking(move || Self::find_sync(filter, limit, skip)).await?
     }
     async fn find_one<F>(filter: F) -> Result<Option<Self>>
     where

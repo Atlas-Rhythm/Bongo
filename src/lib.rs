@@ -4,7 +4,9 @@ mod globals;
 pub mod re_exports;
 
 #[cfg(feature = "derive")]
-pub use bongo_derive::*;
+pub use bongo_derive::BlockingModel;
+#[cfg(all(feature = "derive", feature = "tokio"))]
+pub use bongo_derive::Model;
 
 pub use crate::{error::Error, globals::*};
 use bson::{bson, doc, Bson, Document};
@@ -29,6 +31,8 @@ pub trait BlockingModel: DeserializeOwned + Serialize {
     fn id_query(&self) -> Document {
         doc! {"_id": self.id().into()}
     }
+
+    fn check_relations(&self) -> Result<()>;
 
     fn estimated_document_count_sync() -> Result<i64> {
         Ok(Self::collection()?.estimated_document_count(None)?)

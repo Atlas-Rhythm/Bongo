@@ -1,16 +1,16 @@
 extern crate proc_macro;
 
 use proc_macro::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::{
-    parse_macro_input, Attribute, Data, DeriveInput, Field, Fields, FieldsNamed, Lit, Meta,
-    MetaList, NestedMeta,
+    parse_macro_input, Attribute, Data, DeriveInput, Field, Fields, FieldsNamed, Ident, Lit, Meta,
+    MetaList, NestedMeta, Path,
 };
 
 #[proc_macro_derive(BlockingModel, attributes(bongo))]
 pub fn blocking_model(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    TokenStream::from(blocking_model_impl(input))
+    TokenStream::from(blocking_model_impl(input).0)
 }
 
 #[proc_macro_derive(Model, attributes(bongo))]
@@ -19,17 +19,22 @@ pub fn model(input: TokenStream) -> TokenStream {
 
     let ident = input.ident.clone();
 
-    let blocking_impl = blocking_model_impl(input);
+    let (blocking_impl, relations) = blocking_model_impl(input);
+    let getters = relations.getters;
 
     let expanded = quote! {
         #blocking_impl
 
         impl ::bongo::Model for #ident {}
+
+        impl #ident {
+            #(#getters)*
+        }
     };
     TokenStream::from(expanded)
 }
 
-fn blocking_model_impl(input: DeriveInput) -> proc_macro2::TokenStream {
+fn blocking_model_impl(input: DeriveInput) -> (proc_macro2::TokenStream, Relations) {
     let ident = &input.ident;
     let fields = match &input.data {
         Data::Struct(s) => match &s.fields {
@@ -45,31 +50,52 @@ fn blocking_model_impl(input: DeriveInput) -> proc_macro2::TokenStream {
     let id_ty = &id.ty;
     let id_ident = id.ident.as_ref().unwrap();
 
-    quote! {
-        impl ::bongo::BlockingModel for #ident {
-            type Id = #id_ty;
+    let relations = relations(fields);
+    let Relations {
+        getters_sync,
+        checks,
+        ..
+    } = &relations;
 
-            fn collection() -> ::bongo::Result<&'static ::bongo::re_exports::mongodb::Collection> {
-                use ::bongo::re_exports::{
-                    mongodb::Collection,
-                    once_cell::sync::OnceCell,
-                };
+    (
+        quote! {
+            impl ::bongo::BlockingModel for #ident {
+                type Id = #id_ty;
 
-                static COLLECTION: OnceCell<Collection> = OnceCell::new();
+                fn collection() -> ::bongo::Result<&'static ::bongo::re_exports::mongodb::Collection> {
+                    use ::bongo::re_exports::{
+                        mongodb::Collection,
+                        once_cell::sync::OnceCell,
+                    };
 
-                if let Some(c) = COLLECTION.get() {
-                    return Ok(c);
+                    static COLLECTION: OnceCell<Collection> = OnceCell::new();
+
+                    if let Some(c) = COLLECTION.get() {
+                        return Ok(c);
+                    }
+
+                    COLLECTION.set(::bongo::database()?.collection(#collection)).unwrap();
+                    Ok(COLLECTION.get().unwrap())
                 }
 
-                COLLECTION.set(::bongo::database()?.collection(#collection)).unwrap();
-                Ok(COLLECTION.get().unwrap())
+                fn id(&self) -> Self::Id {
+                    self.#id_ident.clone()
+                }
+
+                fn check_relations(&self) -> ::bongo::Result<()> {
+                    use ::bongo::{BlockingModel, Error};
+
+                    #(#checks)*
+                    Ok(())
+                }
             }
 
-            fn id(&self) -> Self::Id {
-                self.#id_ident.clone()
+            impl #ident {
+                #(#getters_sync)*
             }
-        }
-    }
+        },
+        relations,
+    )
 }
 
 fn attr_is_bongo(attr: &Attribute) -> bool {
@@ -146,4 +172,210 @@ fn id_field(fields: &FieldsNamed) -> &Field {
         }
     }
     panic!("no _id field on struct");
+}
+
+struct Relations {
+    getters_sync: Vec<proc_macro2::TokenStream>,
+    getters: Vec<proc_macro2::TokenStream>,
+    checks: Vec<proc_macro2::TokenStream>,
+}
+
+fn relations(fields: &FieldsNamed) -> Relations {
+    let mut getters_sync = Vec::new();
+    let mut getters = Vec::new();
+    let mut checks = Vec::new();
+
+    for field in &fields.named {
+        let ident = field.ident.as_ref().unwrap();
+
+        let attrs = &field.attrs;
+        for attr in attrs {
+            if !attr_is_bongo(attr) {
+                continue;
+            }
+
+            let attr = parse_attr(attr);
+            for opt in attr.nested {
+                let ml = match opt {
+                    NestedMeta::Meta(Meta::List(ml)) => ml,
+                    _ => continue,
+                };
+
+                let relation = if ml.path.is_ident("has_one") {
+                    one_relation(&ml, ident)
+                } else if ml.path.is_ident("has_many") {
+                    many_relation(&ml, ident)
+                } else {
+                    continue;
+                };
+                getters_sync.push(relation.getter_sync);
+                getters.push(relation.getter);
+                checks.push(relation.check);
+            }
+        }
+    }
+
+    Relations {
+        getters_sync,
+        getters,
+        checks,
+    }
+}
+
+struct Relation {
+    getter_sync: proc_macro2::TokenStream,
+    getter: proc_macro2::TokenStream,
+    check: proc_macro2::TokenStream,
+}
+
+fn one_relation(ml: &MetaList, ident: &Ident) -> Relation {
+    let rel = relation_info(ml, ident);
+    let RelationInfo {
+        model,
+        sync_getter_name,
+        getter_name,
+    } = rel;
+
+    let getter_sync = quote! {
+        pub fn #sync_getter_name(&self) -> ::bongo::Result<#model> {
+            use ::bongo::{BlockingModel, Error};
+
+            match #model::find_by_id_sync(self.#ident.clone())? {
+                Some(m) => Ok(m),
+                None => Err(Error::Relation(format!(
+                    "referenced document with id {} doesn't exist",
+                    self.#ident,
+                ))),
+            }
+        }
+    };
+    let getter = quote! {
+        pub async fn #getter_name(&self) -> ::bongo::Result<#model> {
+            use ::bongo::{re_exports::tokio::task, BlockingModel, Error};
+
+            let id = self.#ident.clone();
+            match task::spawn_blocking(move || #model::find_by_id_sync(id)).await?? {
+                Some(m) => Ok(m),
+                None => Err(Error::Relation(format!(
+                    "referenced document with id {} doesn't exist",
+                    self.#ident,
+                ))),
+            }
+        }
+    };
+    let check = quote! {
+        if #model::find_by_id_sync(self.#ident.clone())?.is_none() {
+            return Err(Error::Relation(format!(
+                "referenced document with id {} doesn't exist",
+                self.#ident,
+            )));
+        }
+    };
+
+    Relation {
+        getter_sync,
+        getter,
+        check,
+    }
+}
+
+fn many_relation(ml: &MetaList, ident: &Ident) -> Relation {
+    let rel = relation_info(ml, ident);
+    let RelationInfo {
+        model,
+        sync_getter_name,
+        getter_name,
+    } = rel;
+
+    let getter_sync = quote! {
+        pub fn #sync_getter_name(&self) -> ::bongo::Result<Vec<#model>> {
+            use ::bongo::{BlockingModel, Error};
+
+            let mut result = Vec::with_capacity(self.#ident.len());
+            for id in &self.#ident {
+                match #model::find_by_id_sync(id.clone())? {
+                    Some(m) => result.push(m),
+                    None => {
+                        return Err(Error::Relation(format!(
+                            "referenced document with id {} doesn't exist",
+                            id,
+                        )));
+                    },
+                }
+            }
+            Ok(result)
+        }
+    };
+    let getter = quote! {
+        pub async fn #getter_name(&self) -> ::bongo::Result<Vec<#model>> {
+            use ::bongo::{re_exports::tokio::task, BlockingModel, Error};
+
+            let mut result = Vec::with_capacity(self.#ident.len());
+            for id in &self.#ident {
+                let id = id.clone();
+                match task::spawn_blocking(move || #model::find_by_id_sync(id)).await?? {
+                    Some(m) => result.push(m),
+                    None => {
+                        return Err(Error::Relation(format!(
+                            "referenced document with id {} doesn't exist",
+                            id,
+                        )));
+                    },
+                }
+            }
+            Ok(result)
+        }
+    };
+    let check = quote! {
+        for id in &self.#ident {
+            if #model::find_by_id_sync(id.clone())?.is_none() {
+                return Err(Error::Relation(format!(
+                    "referenced document with id {} doesn't exist",
+                    id,
+                )));
+            }
+        }
+    };
+
+    Relation {
+        getter_sync,
+        getter,
+        check,
+    }
+}
+
+struct RelationInfo<'a> {
+    model: &'a Path,
+    sync_getter_name: Ident,
+    getter_name: Ident,
+}
+
+fn relation_info<'a, 'b>(ml: &'a MetaList, ident: &'b Ident) -> RelationInfo<'a> {
+    let nested = &ml.nested;
+    let mut nested_iter = nested.iter();
+
+    let model = match nested_iter.next() {
+        Some(NestedMeta::Meta(Meta::Path(p))) => p,
+        _ => panic!("first argument of relation attribute must be the target type"),
+    };
+    let sync_getter_name = match nested_iter.next() {
+        Some(NestedMeta::Lit(Lit::Str(s))) => format_ident!("{}", s.value()),
+        None => format_ident!("{}_sync", ident),
+        _ => panic!(
+            "second argument of relation attribute must be the synchronous getter name as a string literal"
+        ),
+    };
+    let getter_name = match nested_iter.next() {
+        Some(NestedMeta::Lit(Lit::Str(s))) => format_ident!("{}", s.value()),
+        None => format_ident!("{}", ident),
+        _ => panic!(
+            "second argument of relation attribute must be the getter name as a string literal"
+        ),
+    };
+
+    RelationInfo {
+        model,
+        sync_getter_name,
+        getter_name,
+    }
 }

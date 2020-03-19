@@ -12,6 +12,8 @@ pub enum Error {
     AlreadyConnected,
     #[error("tried to access unconnected client")]
     NotConnected,
+    #[error("relational error: {0}")]
+    Relation(String),
 
     #[cfg(feature = "tokio")]
     #[cfg_attr(feature = "tokio", error("task error: {0}"))]

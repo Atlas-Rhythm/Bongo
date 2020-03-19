@@ -5,7 +5,7 @@ pub mod re_exports;
 
 #[cfg(feature = "derive")]
 pub use bongo_derive::BlockingModel;
-#[cfg(all(feature = "derive", feature = "tokio"))]
+#[cfg(all(feature = "derive", feature = "async"))]
 pub use bongo_derive::Model;
 
 pub use crate::{error::Error, globals::*};
@@ -20,9 +20,9 @@ use serde::{de::DeserializeOwned, Serialize};
 pub type Result<T> = std::result::Result<T, Error>;
 
 pub trait BlockingModel: DeserializeOwned + Serialize {
-    #[cfg(not(feature = "tokio"))]
+    #[cfg(not(feature = "async"))]
     type Id: Into<Bson> + Clone;
-    #[cfg(feature = "tokio")]
+    #[cfg(feature = "async")]
     type Id: Into<Bson> + Clone + Send;
 
     fn collection() -> Result<&'static Collection>;
@@ -32,7 +32,7 @@ pub trait BlockingModel: DeserializeOwned + Serialize {
         doc! {"_id": self.id().into()}
     }
 
-    fn check_relations(&self) -> Result<()>;
+    fn check_relations_sync(&self) -> Result<()>;
 
     fn estimated_document_count_sync() -> Result<i64> {
         Ok(Self::collection()?.estimated_document_count(None)?)
@@ -92,6 +92,8 @@ pub trait BlockingModel: DeserializeOwned + Serialize {
     }
 
     fn save_sync(&self) -> Result<UpdateResult> {
+        self.check_relations_sync()?;
+
         Ok(Self::collection()?.replace_one(
             self.id_query(),
             to_document(&self)?,
@@ -109,14 +111,16 @@ pub trait BlockingModel: DeserializeOwned + Serialize {
     }
 }
 
-#[cfg(feature = "tokio")]
+#[cfg(feature = "async")]
 use async_trait::async_trait;
-#[cfg(feature = "tokio")]
+#[cfg(feature = "async")]
 use tokio::task::spawn_blocking;
 
-#[cfg(feature = "tokio")]
-#[cfg_attr(feature = "tokio", async_trait)]
+#[cfg(feature = "async")]
+#[cfg_attr(feature = "async", async_trait)]
 pub trait Model: BlockingModel + Send + Sync + 'static {
+    async fn check_relations(&self) -> Result<()>;
+
     async fn estimated_document_count() -> Result<i64> {
         spawn_blocking(Self::estimated_document_count_sync).await?
     }
@@ -164,6 +168,8 @@ pub trait Model: BlockingModel + Send + Sync + 'static {
     }
 
     async fn save(&self) -> Result<UpdateResult> {
+        self.check_relations().await?;
+
         let query = self.id_query();
         let replacement = to_document(self)?;
         spawn_blocking(move || {

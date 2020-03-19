@@ -21,8 +21,8 @@ struct Todo {
 struct Useless {
     #[serde(rename = "_id")]
     id: f64,
-    #[bongo(has_many(Todo, "todos", "todos_async"))]
-    todos: Vec<i32>,
+    #[bongo(has_many(BlockingUseless, "stuff", "stuff_async"))]
+    stuff: Vec<String>,
 }
 
 #[derive(BlockingModel, Serialize, Deserialize)]

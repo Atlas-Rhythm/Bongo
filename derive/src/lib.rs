@@ -20,12 +20,22 @@ pub fn model(input: TokenStream) -> TokenStream {
     let ident = input.ident.clone();
 
     let (blocking_impl, relations) = blocking_model_impl(input);
-    let getters = relations.getters;
+    let Relations {
+        getters, checks, ..
+    } = relations;
 
     let expanded = quote! {
         #blocking_impl
 
-        impl ::bongo::Model for #ident {}
+        #[::bongo::re_exports::async_trait::async_trait]
+        impl ::bongo::Model for #ident {
+            async fn check_relations(&self) -> ::bongo::Result<()> {
+                use ::bongo::{re_exports::tokio::task, BlockingModel, Error};
+
+                #(#checks)*
+                Ok(())
+            }
+        }
 
         impl #ident {
             #(#getters)*
@@ -53,7 +63,7 @@ fn blocking_model_impl(input: DeriveInput) -> (proc_macro2::TokenStream, Relatio
     let relations = relations(fields);
     let Relations {
         getters_sync,
-        checks,
+        checks_sync,
         ..
     } = &relations;
 
@@ -82,10 +92,10 @@ fn blocking_model_impl(input: DeriveInput) -> (proc_macro2::TokenStream, Relatio
                     self.#id_ident.clone()
                 }
 
-                fn check_relations(&self) -> ::bongo::Result<()> {
+                fn check_relations_sync(&self) -> ::bongo::Result<()> {
                     use ::bongo::{BlockingModel, Error};
 
-                    #(#checks)*
+                    #(#checks_sync)*
                     Ok(())
                 }
             }
@@ -177,12 +187,14 @@ fn id_field(fields: &FieldsNamed) -> &Field {
 struct Relations {
     getters_sync: Vec<proc_macro2::TokenStream>,
     getters: Vec<proc_macro2::TokenStream>,
+    checks_sync: Vec<proc_macro2::TokenStream>,
     checks: Vec<proc_macro2::TokenStream>,
 }
 
 fn relations(fields: &FieldsNamed) -> Relations {
     let mut getters_sync = Vec::new();
     let mut getters = Vec::new();
+    let mut checks_sync = Vec::new();
     let mut checks = Vec::new();
 
     for field in &fields.named {
@@ -210,6 +222,7 @@ fn relations(fields: &FieldsNamed) -> Relations {
                 };
                 getters_sync.push(relation.getter_sync);
                 getters.push(relation.getter);
+                checks_sync.push(relation.check_sync);
                 checks.push(relation.check);
             }
         }
@@ -218,6 +231,7 @@ fn relations(fields: &FieldsNamed) -> Relations {
     Relations {
         getters_sync,
         getters,
+        checks_sync,
         checks,
     }
 }
@@ -225,6 +239,7 @@ fn relations(fields: &FieldsNamed) -> Relations {
 struct Relation {
     getter_sync: proc_macro2::TokenStream,
     getter: proc_macro2::TokenStream,
+    check_sync: proc_macro2::TokenStream,
     check: proc_macro2::TokenStream,
 }
 
@@ -263,8 +278,17 @@ fn one_relation(ml: &MetaList, ident: &Ident) -> Relation {
             }
         }
     };
-    let check = quote! {
+    let check_sync = quote! {
         if #model::find_by_id_sync(self.#ident.clone())?.is_none() {
+            return Err(Error::Relation(format!(
+                "referenced document with id {} doesn't exist",
+                self.#ident,
+            )));
+        }
+    };
+    let check = quote! {
+        let id = self.#ident.clone();
+        if task::spawn_blocking(move || #model::find_by_id_sync(id)).await??.is_none() {
             return Err(Error::Relation(format!(
                 "referenced document with id {} doesn't exist",
                 self.#ident,
@@ -275,6 +299,7 @@ fn one_relation(ml: &MetaList, ident: &Ident) -> Relation {
     Relation {
         getter_sync,
         getter,
+        check_sync,
         check,
     }
 }
@@ -312,8 +337,8 @@ fn many_relation(ml: &MetaList, ident: &Ident) -> Relation {
 
             let mut result = Vec::with_capacity(self.#ident.len());
             for id in &self.#ident {
-                let id = id.clone();
-                match task::spawn_blocking(move || #model::find_by_id_sync(id)).await?? {
+                let move_id = id.clone();
+                match task::spawn_blocking(move || #model::find_by_id_sync(move_id)).await?? {
                     Some(m) => result.push(m),
                     None => {
                         return Err(Error::Relation(format!(
@@ -326,9 +351,20 @@ fn many_relation(ml: &MetaList, ident: &Ident) -> Relation {
             Ok(result)
         }
     };
-    let check = quote! {
+    let check_sync = quote! {
         for id in &self.#ident {
             if #model::find_by_id_sync(id.clone())?.is_none() {
+                return Err(Error::Relation(format!(
+                    "referenced document with id {} doesn't exist",
+                    id,
+                )));
+            }
+        }
+    };
+    let check = quote! {
+        for id in &self.#ident {
+            let move_id = id.clone();
+            if task::spawn_blocking(move || #model::find_by_id_sync(move_id)).await??.is_none() {
                 return Err(Error::Relation(format!(
                     "referenced document with id {} doesn't exist",
                     id,
@@ -340,6 +376,7 @@ fn many_relation(ml: &MetaList, ident: &Ident) -> Relation {
     Relation {
         getter_sync,
         getter,
+        check_sync,
         check,
     }
 }

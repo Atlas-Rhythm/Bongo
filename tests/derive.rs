@@ -24,3 +24,8 @@ struct Useless {
     #[bongo(has_many(Todo, "todos", "todos_async"))]
     todos: Vec<i32>,
 }
+
+#[derive(BlockingModel, Serialize, Deserialize)]
+struct BlockingUseless {
+    _id: String,
+}

@@ -31,6 +31,7 @@ pub fn model(input: TokenStream) -> TokenStream {
         impl ::bongo::Model for #ident {
             async fn check_relations(&self) -> ::bongo::Result<()> {
                 use ::bongo::{re_exports::tokio::task, BlockingModel, Error};
+                use ::bson::{bson, doc};
 
                 #(#checks)*
                 Ok(())
@@ -94,6 +95,7 @@ fn blocking_model_impl(input: DeriveInput) -> (proc_macro2::TokenStream, Relatio
 
                 fn check_relations_sync(&self) -> ::bongo::Result<()> {
                     use ::bongo::{BlockingModel, Error};
+                    use ::bson::{bson, doc};
 
                     #(#checks_sync)*
                     Ok(())
@@ -279,7 +281,7 @@ fn one_relation(ml: &MetaList, ident: &Ident) -> Relation {
         }
     };
     let check_sync = quote! {
-        if #model::find_by_id_sync(self.#ident.clone())?.is_none() {
+        if #model::count_documents_sync(doc! {"_id": self.#ident.clone()})? < 1 {
             return Err(Error::Relation(format!(
                 "referenced document with id {} doesn't exist",
                 self.#ident,
@@ -287,8 +289,8 @@ fn one_relation(ml: &MetaList, ident: &Ident) -> Relation {
         }
     };
     let check = quote! {
-        let id = self.#ident.clone();
-        if task::spawn_blocking(move || #model::find_by_id_sync(id)).await??.is_none() {
+        let query = doc! {"_id": self.#ident.clone()};
+        if task::spawn_blocking(move || #model::count_documents_sync(query)).await?? < 1 {
             return Err(Error::Relation(format!(
                 "referenced document with id {} doesn't exist",
                 self.#ident,
@@ -353,7 +355,7 @@ fn many_relation(ml: &MetaList, ident: &Ident) -> Relation {
     };
     let check_sync = quote! {
         for id in &self.#ident {
-            if #model::find_by_id_sync(id.clone())?.is_none() {
+            if #model::count_documents_sync(doc! {"_id": id.clone()})? < 1 {
                 return Err(Error::Relation(format!(
                     "referenced document with id {} doesn't exist",
                     id,
@@ -363,8 +365,8 @@ fn many_relation(ml: &MetaList, ident: &Ident) -> Relation {
     };
     let check = quote! {
         for id in &self.#ident {
-            let move_id = id.clone();
-            if task::spawn_blocking(move || #model::find_by_id_sync(move_id)).await??.is_none() {
+            let query = doc! {"_id": id.clone()};
+            if task::spawn_blocking(move || #model::count_documents_sync(query)).await?? < 1 {
                 return Err(Error::Relation(format!(
                     "referenced document with id {} doesn't exist",
                     id,

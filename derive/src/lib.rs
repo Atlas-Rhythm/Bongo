@@ -30,8 +30,10 @@ pub fn model(input: TokenStream) -> TokenStream {
         #[::bongo::re_exports::async_trait::async_trait]
         impl ::bongo::Model for #ident {
             async fn check_relations(&self) -> ::bongo::Result<()> {
-                use ::bongo::{re_exports::tokio::task, BlockingModel, Error};
-                use ::bson::{bson, doc};
+                use ::bongo::{
+                    re_exports::{bson::{bson, doc}, tokio::task},
+                    BlockingModel, Error,
+                };
 
                 #(#checks)*
                 Ok(())
@@ -94,8 +96,7 @@ fn blocking_model_impl(input: DeriveInput) -> (proc_macro2::TokenStream, Relatio
                 }
 
                 fn check_relations_sync(&self) -> ::bongo::Result<()> {
-                    use ::bongo::{BlockingModel, Error};
-                    use ::bson::{bson, doc};
+                    use ::bongo::{re_exports::bson::{bson, doc}, BlockingModel, Error};
 
                     #(#checks_sync)*
                     Ok(())
